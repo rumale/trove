@@ -18,6 +18,7 @@ import os
 from trove.common import cfg
 from trove.common import exception
 from trove.common import instance as ds_instance
+from trove.guestagent import backup
 from trove.guestagent import dbaas
 from trove.guestagent import volume
 from trove.guestagent.common import operating_system
@@ -48,55 +49,65 @@ class Manager(periodic_task.PeriodicTasks):
                 device_path=None, mount_point=None, backup_info=None,
                 config_contents=None, root_password=None, overrides=None,
                 cluster_config=None):
-        """Makes ready DBAAS on a Guest container."""
-        LOG.debug("Prepare MongoDB instance")
+        try:
+            """Makes ready DBAAS on a Guest container."""
+            LOG.debug("Prepare MongoDB instance")
 
-        self.status.begin_install()
-        self.app.install_if_needed(packages)
-        self.app.stop_db()
-        self.app.clear_storage()
-        mount_point = system.MONGODB_MOUNT_POINT
-        if device_path:
-            device = volume.VolumeDevice(device_path)
-            # unmount if device is already mounted
-            device.unmount_device(device_path)
-            device.format()
-            if os.path.exists(system.MONGODB_MOUNT_POINT):
-                device.migrate_data(mount_point)
-            device.mount(mount_point)
-            operating_system.update_owner('mongodb', 'mongodb', mount_point)
+            self.status.begin_install()
+            self.app.install_if_needed(packages)
+            self.app.stop_db()
+            self.app.clear_storage()
+            mount_point = system.MONGODB_MOUNT_POINT
+            if device_path:
+                device = volume.VolumeDevice(device_path)
+                # unmount if device is already mounted
+                device.unmount_device(device_path)
+                device.format()
+                if os.path.exists(system.MONGODB_MOUNT_POINT):
+                    device.migrate_data(mount_point)
+                device.mount(mount_point)
+                operating_system.update_owner('mongodb', 'mongodb',
+                                              mount_point)
 
-            LOG.debug("Mounted the volume %(path)s as %(mount)s" %
-                      {'path': device_path, "mount": mount_point})
+                LOG.debug("Mounted the volume %(path)s as %(mount)s" %
+                          {'path': device_path, "mount": mount_point})
 
-        conf_changes = self.get_config_changes(cluster_config, mount_point)
-        config_contents = self.app.update_config_contents(
-            config_contents, conf_changes)
-        if cluster_config is None:
-            self.app.start_db_with_conf_changes(config_contents)
-        else:
-            if cluster_config['instance_type'] == "query_router":
-                self.app.reset_configuration({'config_contents':
-                                              config_contents})
-                self.app.write_mongos_upstart()
-                self.app.status.is_query_router = True
-                # don't start mongos until add_config_servers is invoked
-
-            elif cluster_config['instance_type'] == "config_server":
-                self.app.status.is_config_server = True
+            conf_changes = self.get_config_changes(cluster_config, mount_point)
+            config_contents = self.app.update_config_contents(
+                config_contents, conf_changes)
+            if cluster_config is None:
                 self.app.start_db_with_conf_changes(config_contents)
-
-            elif cluster_config['instance_type'] == "member":
-                self.app.start_db_with_conf_changes(config_contents)
-
+                if backup_info:
+                    self._perform_restore(backup_info, context,
+                                          mount_point, self.app)
             else:
-                LOG.error("Bad cluster configuration; instance type given "
-                          "as %s" % cluster_config['instance_type'])
-                self.status.set_status(ds_instance.ServiceStatuses.FAILED)
-                return
+                if cluster_config['instance_type'] == "query_router":
+                    self.app.reset_configuration({'config_contents':
+                                                  config_contents})
+                    self.app.write_mongos_upstart()
+                    self.app.status.is_query_router = True
+                    # don't start mongos until add_config_servers is invoked
 
-            self.status.set_status(ds_instance.ServiceStatuses.BUILD_PENDING)
-        LOG.info(_('"prepare" call has finished.'))
+                elif cluster_config['instance_type'] == "config_server":
+                    self.app.status.is_config_server = True
+                    self.app.start_db_with_conf_changes(config_contents)
+
+                elif cluster_config['instance_type'] == "member":
+                    self.app.start_db_with_conf_changes(config_contents)
+
+                else:
+                    LOG.error("Bad cluster configuration; instance type given "
+                              "as %s" % cluster_config['instance_type'])
+                    self.status.set_status(ds_instance.ServiceStatuses.FAILED)
+                    return
+
+                self.status.set_status(ds_instance.
+                                       ServiceStatuses.BUILD_PENDING)
+            LOG.info(_('"prepare" call has finished.'))
+        except Exception as e:
+            LOG.error(e)
+            self.status.set_status(ds_instance.ServiceStatuses.FAILED)
+            raise RuntimeError("prepare call has failed.")
 
     def get_config_changes(self, cluster_config, mount_point=None):
         config_changes = {}
@@ -191,12 +202,19 @@ class Manager(periodic_task.PeriodicTasks):
             operation='is_root_enabled', datastore=MANAGER)
 
     def _perform_restore(self, backup_info, context, restore_location, app):
-        raise exception.DatastoreOperationNotSupported(
-            operation='_perform_restore', datastore=MANAGER)
+        LOG.info(_("Restoring database from backup %s") % backup_info['id'])
+        try:
+            backup.restore(context, backup_info, restore_location)
+        except Exception as e:
+            LOG.error(e)
+            LOG.error(_("Error performing restore from backup %s") %
+                      backup_info['id'])
+            self.status.set_status(ds_instance.ServiceStatuses.FAILED)
+            raise
+        LOG.info(_("Restored database successfully"))
 
     def create_backup(self, context, backup_info):
-        raise exception.DatastoreOperationNotSupported(
-            operation='create_backup', datastore=MANAGER)
+        backup.backup(context, backup_info)
 
     def mount_volume(self, context, device_path=None, mount_point=None):
         device = volume.VolumeDevice(device_path)

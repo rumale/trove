@@ -490,9 +490,16 @@ mongodb_opts = [
     cfg.ListOpt('udp_ports', default=[],
                 help='List of UPD ports and/or port ranges to open'
                      ' in the security group (only applicable '
-                     'if trove_security_groups_support is True).'),
-    cfg.StrOpt('backup_strategy', default=None,
+                     'if trove_security_groups_support is True)'),
+    cfg.StrOpt('backup_strategy', default='MongoDump',
                help='Default strategy to perform backups.'),
+    cfg.DictOpt('backup_incremental_strategy',
+                default=dict(),
+                help='Incremental Backup Runner based on the default'
+                ' strategy. For strategies that do not implement an'
+                ' incremental, the runner will use the default full backup.',
+                deprecated_name='backup_incremental_strategy',
+                deprecated_group='DEFAULT'),
     cfg.StrOpt('replication_strategy', default=None,
                help='Default strategy for replication.'),
     cfg.StrOpt('mount_point', default='/var/lib/mongodb',
@@ -523,6 +530,10 @@ mongodb_opts = [
                        'MongoDbGuestAgentStrategy',
                help='Class that implements datastore-specific guest agent API '
                     'logic.'),
+    cfg.StrOpt('backup_namespace',
+               default='trove.guestagent.strategies.backup.mongo_impl'),
+    cfg.StrOpt('restore_namespace',
+               default='trove.guestagent.strategies.restore.mongo_impl')
 ]
 
 # PostgreSQL

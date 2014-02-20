@@ -25,6 +25,7 @@ from trove.conductor import api as conductor_api
 from trove.guestagent.common import operating_system
 from trove.guestagent.strategies.backup import mysql_impl
 from trove.guestagent.strategies.backup import couchbase_impl
+from trove.guestagent.strategies.backup import mongo_impl
 from trove.guestagent.strategies.restore.base import RestoreRunner
 from trove.backup.models import BackupState
 from trove.guestagent.backup import backupagent
@@ -223,6 +224,18 @@ class BackupAgentTest(testtools.TestCase):
         self.assertEqual(str_cbbackup_cmd, cbbackup.cmd)
         self.assertIsNotNone(cbbackup.manifest)
         self.assertIn('gz.enc', cbbackup.manifest)
+
+    def test_backup_impl_MongoDump(self):
+        operating_system.get_ip_address = Mock(return_value="1.1.1.1")
+        utils.execute_with_timeout = Mock(return_value=None)
+        mongodump = mongo_impl.MongoDump('mongodump', extra_opts='')
+        self.assertIsNotNone(mongodump)
+        str_mongodump_cmd = ("sudo tar cPf - /var/lib/mongodb/dump | "
+                             "gzip | openssl enc -aes-256-cbc -salt -pass "
+                             "pass:default_aes_cbc_key")
+        self.assertEqual(str_mongodump_cmd, mongodump.cmd)
+        self.assertIsNotNone(mongodump.manifest)
+        self.assertIn('gz.enc', mongodump.manifest)
 
     def test_backup_base(self):
         """This test is for
